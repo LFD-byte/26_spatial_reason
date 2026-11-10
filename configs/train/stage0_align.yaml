@@ -38,3 +38,6 @@ train:
   n_gen_eval_final: 600
   gen_batch_size: 24
   output_dir: outputs/stage0/novae_k32
+  report_to: none          # none | wandb | tensorboard | [wandb, tensorboard];metrics.jsonl 始终写
+  project: spatial_reason  # wandb 项目名 / TensorBoard 子目录
+  run_name: null           # 默认取 output_dir 的目录名
