@@ -1,5 +1,6 @@
-llm: Qwen/Qwen3-4B
-lora: true
-projector: mlp2
-k_neighbors: 32   # 初始范围 32-64
-hybrid_text: false   # prompt 中附 top marker 基因文本
+model:
+  llm: data/models/Qwen3-4B   # HF Qwen/Qwen3-4B 的本地副本
+  lora: true
+  projector: mlp2
+  k_neighbors: 32   # 初始范围 32-64
+  hybrid_text: false   # prompt 中附 top marker 基因文本
