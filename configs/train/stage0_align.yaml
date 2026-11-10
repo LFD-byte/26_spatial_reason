@@ -1,2 +1,40 @@
 stage: 0
 trainable: [projector]
+
+data:
+  encoder: novae
+  k_neighbors: 32          # 中心 + 32 个邻居 = 33 个细胞 token
+  datasets:                # 每个数据集整张留出一张切片做验证(跨病人 / 跨切片)
+    cosmx_nsclc:
+      val_samples: [Lung13]
+      max_centers_per_sample: 20000
+    merfish_hypothalamus:
+      val_samples: [bregma_-0.24]
+      max_centers_per_sample: 5000
+    starmap:
+      val_samples: [BZ14]
+      max_centers_per_sample: null   # 全部(约 1000)
+  val_centers_per_sample: 200
+
+model:
+  use_position: true
+  gradient_checkpointing: false
+
+train:
+  seed: 0
+  batch_size: 8            # 每张卡的 micro batch;16 时峰值显存接近 48 GB(LLM 激活 + fp32 logits)
+  global_batch_size: 64    # 每个优化器步的总样本数;梯度累积 = 64 / (8 × 卡数),双卡时为 4
+  lr: 1.0e-3               # 只训练投影层,参照 LLaVA 预训练阶段
+  weight_decay: 0.0
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+  max_steps: 3000          # 优化器步数,约 19 万样本(~1.2 epoch)
+  max_length: 512
+  num_workers: 4
+  log_every: 10
+  eval_every: 250
+  eval_max_batches: null   # val 全部 600 个样本
+  n_gen_eval: 48
+  n_gen_eval_final: 600
+  gen_batch_size: 24
+  output_dir: outputs/stage0/novae_k32

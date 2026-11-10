@@ -1,0 +1,15 @@
+# 阶段 0:LLM 冻结、只训投影层 -> DDP 最合适(每卡一份 LLM,只同步投影层梯度)。
+# 阶段 1/2 训 LoRA 时可换成 DeepSpeed ZeRO-2 或 FSDP2 的配置,训练代码不用改。
+#
+#   accelerate launch --config_file configs/accelerate/ddp_2gpu.yaml scripts/06_train.py \
+#       --config configs/train/stage0_align.yaml
+compute_environment: LOCAL_MACHINE
+distributed_type: MULTI_GPU
+num_machines: 1
+num_processes: 2
+gpu_ids: all
+mixed_precision: "no"        # LLM 权重本身是 bf16;投影层保持 fp32
+main_training_function: main
+rdzv_backend: static
+same_network: true
+use_cpu: false
