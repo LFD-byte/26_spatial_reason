@@ -1,0 +1,24 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# data, outputs, external code
+data/*
+!data/README.md
+outputs/*
+!outputs/README.md
+third_party/*
+!third_party/README.md
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# misc
+.DS_Store
+.env
+wandb/

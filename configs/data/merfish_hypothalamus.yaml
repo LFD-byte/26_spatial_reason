@@ -1,0 +1,3 @@
+name: merfish_hypothalamus
+platform: merfish
+split_by: slice

@@ -1,0 +1,15 @@
+[workspace]
+authors = ["huifa <huifali@163.com>"]
+channels = ["conda-forge"]
+name = "project_spatial_reason"
+platforms = ["osx-arm64", "linux-64"]
+version = "0.1.0"
+
+[tasks]
+test = "pytest"
+
+[dependencies]
+python = "3.11.*"
+
+[pypi-dependencies]
+spatial-reason = { path = ".", editable = true, extras = ["dev"] }

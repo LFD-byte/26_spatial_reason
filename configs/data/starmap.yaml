@@ -1,0 +1,3 @@
+name: starmap
+platform: starmap
+split_by: slice

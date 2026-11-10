@@ -1,0 +1,2 @@
+metrics: [nmi, ari, accuracy]
+splits: [cross_replicate, cross_donor, cross_platform]
