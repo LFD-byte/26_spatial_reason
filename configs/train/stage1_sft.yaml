@@ -1,2 +1,71 @@
 stage: 1
 trainable: [projector, lora]
+
+data:
+  encoder: novae
+  k_neighbors: 32
+  datasets:                     # 与阶段 0 相同的留出切片
+    cosmx_nsclc:
+      val_samples: [Lung13]
+      traces_per_label_train: 1500   # 9 个 niche,类别平衡
+      traces_per_label_val: 60
+    merfish_hypothalamus:
+      val_samples: [bregma_-0.24]
+      traces_per_label_train: 600    # 8 个区域
+      traces_per_label_val: 40
+    starmap:
+      val_samples: [BZ14]
+      traces_per_label_train: 300    # 4 层;STARmap 总共约 2100 个训练细胞
+      traces_per_label_val: 40
+  sampling_alpha: 0.5
+
+traces:
+  dir: data/traces/qwen3_32b
+  seed: 0
+  top_genes: 10                 # 给教师看的富集基因个数
+  criteria:                     # 富集判定阈值(方案第 11 节待定项)
+    min_frac: 0.10
+    min_ratio: 1.5
+    dominant_frac: 0.50
+    min_effect: 0.5
+    min_detect: 0.3
+  teacher:
+    model: data/models/Qwen3-32B
+    tensor_parallel_size: 2
+    temperature: 0.7
+    top_p: 0.9
+    max_tokens: 640
+    n: 2                        # 每个邻域采 2 条,过滤后最多保留 1 条
+
+model:
+  init_projector: outputs/stage0/novae_k32_bal/projector_best.pt
+  use_position: true
+  gradient_checkpointing: true
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+train:
+  seed: 0
+  batch_size: 4                 # 每卡 micro batch
+  global_batch_size: 32
+  lr: 1.0e-4                    # LoRA
+  projector_lr: 2.0e-5          # 投影层已对齐,用更小的学习率
+  weight_decay: 0.0
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+  epochs: 2
+  max_length: 1024
+  num_workers: 4
+  log_every: 10
+  eval_every: 200
+  n_gen_eval: 120
+  n_gen_eval_final: 600
+  gen_batch_size: 16
+  max_new_tokens: 384
+  output_dir: outputs/stage1/novae_qwen3_32b_teacher
+  report_to: tensorboard
+  project: spatial_reason
+  run_name: null

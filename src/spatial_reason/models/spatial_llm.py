@@ -20,7 +20,10 @@ CELL_TOKEN = "<|cell|>"
 class SpatialLLM(nn.Module):
     def __init__(self, llm_path: str | Path, embed_dim: int, use_position: bool = True,
                  n_freqs: int = 8, freeze_llm: bool = True, dtype: torch.dtype = torch.bfloat16,
-                 gradient_checkpointing: bool = False, device: str | torch.device = "cuda"):
+                 gradient_checkpointing: bool = False, device: str | torch.device = "cuda",
+                 lora: dict | None = None):
+        """lora:None 表示 LLM 完全冻结(阶段 0);给出 {r, alpha, dropout, target_modules} 时
+        基座冻结、只训练 LoRA(阶段 1/2)。"""
         super().__init__()
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -33,13 +36,21 @@ class SpatialLLM(nn.Module):
         n_emb = self.llm.get_input_embeddings().weight.shape[0]
         if self.cell_token_id >= n_emb:
             self.llm.resize_token_embeddings(len(self.tokenizer))
-        if freeze_llm:
+        if freeze_llm or lora:
             self.llm.requires_grad_(False)
-            self.llm.eval()
-        self.freeze_llm = freeze_llm
         if gradient_checkpointing:
             self.llm.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
             self.llm.config.use_cache = False
+        if lora:
+            from peft import LoraConfig, get_peft_model
+
+            self.llm = get_peft_model(self.llm, LoraConfig(
+                r=lora["r"], lora_alpha=lora["alpha"], lora_dropout=lora.get("dropout", 0.0),
+                target_modules=lora["target_modules"], task_type="CAUSAL_LM"))
+        # 只有"完全冻结、没有 LoRA"时才把 LLM 固定在 eval 模式;有 LoRA 时需要 dropout
+        self.freeze_llm = freeze_llm and not lora
+        if self.freeze_llm:
+            self.llm.eval()
 
         hidden = self.llm.config.hidden_size
         self.projector = CellProjector(embed_dim, hidden, use_position=use_position, n_freqs=n_freqs).to(device)
@@ -84,8 +95,23 @@ class SpatialLLM(nn.Module):
     @torch.no_grad()
     def generate(self, input_ids, attention_mask, cell_emb, rel_pos=None, **gen_kwargs):
         embeds = self.build_inputs_embeds(input_ids, cell_emb, rel_pos)
-        return self.llm.generate(inputs_embeds=embeds, attention_mask=attention_mask,
-                                 pad_token_id=self.tokenizer.pad_token_id, **gen_kwargs)
+        use_cache = getattr(self.llm.config, "use_cache", True)
+        self.llm.config.use_cache = True  # 梯度检查点会关掉 cache,生成时临时打开
+        try:
+            return self.llm.generate(inputs_embeds=embeds, attention_mask=attention_mask,
+                                     pad_token_id=self.tokenizer.pad_token_id, use_cache=True, **gen_kwargs)
+        finally:
+            self.llm.config.use_cache = use_cache
+
+    def save_lora(self, path: str | Path) -> None:
+        if hasattr(self.llm, "peft_config"):
+            self.llm.save_pretrained(str(path))
+
+    def load_lora(self, path: str | Path) -> None:
+        from peft import set_peft_model_state_dict
+        from safetensors.torch import load_file
+
+        set_peft_model_state_dict(self.llm, load_file(str(Path(path) / "adapter_model.safetensors")))
 
     def save_projector(self, path: str | Path, extra: dict | None = None) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
