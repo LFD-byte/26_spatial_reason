@@ -24,6 +24,8 @@ def main() -> None:
     stage = cfg["stage"]
     if stage == 0:
         from spatial_reason.training.stage0_align import train
+    elif stage == 1:
+        from spatial_reason.training.stage1_sft import train
     else:
         raise NotImplementedError(f"stage {stage} 尚未实现")
     train(cfg)
