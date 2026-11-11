@@ -48,6 +48,31 @@ Rules:
 Answer in exactly this format and nothing else:
 {fmt}"""
 
+# 纯文本基线:同样的观测数据和候选标签,但不给真值,让 LLM 自己推断。
+# 衡量"从这些文本统计里最多能推出多少",是学生(只看嵌入)的参照上限之一。
+TEXT_ONLY_TAIL = """Infer which candidate label best describes this neighborhood, using the observed data alone.
+Rules:
+- Cite only cell types and genes that appear in the observed data above, with their numbers where useful.
+- Explain why the chosen label fits better than the most plausible alternative candidates.
+- Keep the reasoning to 3-6 sentences.
+- In <evidence>, list only cell types and genes that are enriched in this neighborhood (listed above).
+
+Answer in exactly this format and nothing else:
+{fmt}"""
+
+_LABEL_LINE = "\n\nThe annotated label of this neighborhood is:"
+
+
+def text_only_request(rec: dict) -> dict:
+    """把教师请求改成不含标签的版本:保留上下文、候选和观测数据,去掉标签及其后的指令。"""
+    user = rec["messages"][-1]["content"]
+    head, sep, _ = user.partition(_LABEL_LINE)
+    if not sep:
+        raise ValueError(f"{rec['id']}: 找不到标签行,教师模板变了?")
+    msgs = [m for m in rec["messages"][:-1]] + [
+        {"role": "user", "content": head + "\n\n" + TEXT_ONLY_TAIL.format(fmt=OUTPUT_FORMAT)}]
+    return {k: v for k, v in rec.items() if k != "messages"} | {"messages": msgs}
+
 
 def neighborhood_text(st: NeighborhoodStats, has_cell_type: bool) -> str:
     """把富集统计写成文本(教师输入;也用于纯文本 Qwen 基线)。"""
