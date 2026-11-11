@@ -84,3 +84,13 @@ def test_lora_only_lora_and_projector_train(tmp_path):
     assert (tmp_path / "lora" / "adapter_model.safetensors").exists()
     out = m.generate(b["input_ids"], b["attention_mask"], b["cell_emb"], b["rel_pos"], max_new_tokens=3)
     assert out.shape[0] == 2
+
+
+def test_filter_repairs_copied_placeholder():
+    body = GOOD.split("<reasoning>")[1].split("</reasoning>")[0]
+    bad = ("<reasoning>step-by-step reasoning grounded in the observed data</reasoning>  \n" + body + "\n\n"
+           + GOOD.split("</reasoning>\n")[1])
+    assert not parse_output(bad).well_formed
+    ok, why, _ = check_trace(bad, REC, PANEL)
+    assert ok, why
+    assert parse_output(canonical_target(bad, REC["label"])).reasoning == body

@@ -29,6 +29,8 @@
 
 ## 安装
 
+换服务器见 [docs/迁移服务器.md](docs/迁移服务器.md):代码走 git,数据用 `scripts/sync_project.sh`,模型用 `scripts/download_models.sh`,环境按 `envs/*.lock.txt` 重建。
+
 依赖声明在 `pyproject.toml`,不绑定 pixi:
 
 ```bash
