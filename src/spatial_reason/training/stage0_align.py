@@ -14,9 +14,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from spatial_reason.data.collate import Collator, Stage0Dataset, load_slice, sample_centers
+from spatial_reason.data.collate import (Collator, Stage0Dataset, dataset_balanced_weights, load_slice,
+                                         sample_centers)
 from spatial_reason.data.splits import split_samples
 from spatial_reason.models.spatial_llm import SpatialLLM
 from spatial_reason.utils.logging import JsonlLogger
@@ -167,6 +168,28 @@ def lr_lambda(step: int, warmup: int, total: int) -> float:
     return 0.5 * (1 + math.cos(math.pi * min(1.0, progress)))
 
 
+def _report_to(value) -> list[str]:
+    """train.report_to: "none" | "wandb" | "tensorboard" | 列表。"""
+    items = [value] if isinstance(value, str) else list(value or [])
+    items = [v for v in items if v and v != "none"]
+    unknown = set(items) - {"wandb", "tensorboard"}
+    if unknown:
+        raise ValueError(f"不支持的 report_to: {sorted(unknown)}")
+    return items
+
+
+def _flatten(d: dict, prefix: str = "") -> dict:
+    """嵌套配置展平成 a.b.c 形式,便于在 wandb / TensorBoard 里筛选对比。"""
+    out = {}
+    for k, v in d.items():
+        key = f"{prefix}{k}"
+        if isinstance(v, dict):
+            out.update(_flatten(v, key + "."))
+        else:
+            out[key] = v if isinstance(v, (int, float, str, bool)) or v is None else str(v)
+    return out
+
+
 def train(cfg: dict) -> Path:
     """单卡 / 多卡通用。多卡用 `accelerate launch`,后端由 configs/accelerate/*.yaml 决定(阶段 0 用 DDP)。
 
@@ -184,24 +207,45 @@ def train(cfg: dict) -> Path:
     if gbs % (tcfg["batch_size"] * world):
         raise ValueError(f"global_batch_size {gbs} 不能被 batch_size × 卡数 {tcfg['batch_size'] * world} 整除")
     accum = gbs // (tcfg["batch_size"] * world)
-    accelerator = Accelerator(gradient_accumulation_steps=accum)
+    report_to = _report_to(tcfg.get("report_to", "none"))
+    out_dir = Path(tcfg["output_dir"])
+    accelerator = Accelerator(gradient_accumulation_steps=accum, log_with=report_to or None,
+                              project_dir=str(out_dir))
     assert accelerator.num_processes == world
     acc_set_seed(tcfg["seed"])
     set_seed(tcfg["seed"])
     main = accelerator.is_main_process
 
-    out_dir = Path(tcfg["output_dir"])
+    runtime = {"num_processes": world, "grad_accum": accum, "distributed_type": str(accelerator.distributed_type)}
     if main:
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "config.json").write_text(json.dumps(
-            {**cfg, "runtime": {"num_processes": world, "grad_accum": accum,
-                                "distributed_type": str(accelerator.distributed_type)}},
-            indent=2, ensure_ascii=False))
+        (out_dir / "config.json").write_text(json.dumps({**cfg, "runtime": runtime}, indent=2, ensure_ascii=False))
     logger = JsonlLogger(out_dir / "metrics.jsonl") if main else None
+    if report_to:
+        # 只有主进程真正创建 tracker;wandb 的本地文件放在 output_dir 下
+        accelerator.init_trackers(
+            tcfg.get("project", "spatial_reason"),
+            config=_flatten({**cfg, "runtime": runtime}),
+            init_kwargs={"wandb": {"name": tcfg.get("run_name") or out_dir.name, "dir": str(out_dir),
+                                   "tags": [f"stage{cfg['stage']}", cfg["data"]["encoder"]]}},
+        )
 
-    def log(**rec):
+    def log(split: str, step: int, **rec):
         if main:
-            logger.log(**rec)
+            logger.log(split=split, step=step, **rec)
+            if report_to:
+                accelerator.log({f"{split}/{k}": v for k, v in rec.items() if isinstance(v, (int, float))},
+                                step=step)
+
+    def log_samples(step: int, examples: list[dict], name: str):
+        """生成样例写成 wandb 表格(TensorBoard 不支持表格,只记 jsonl)。"""
+        if not (main and "wandb" in report_to and examples):
+            return
+        import wandb
+
+        cols = ["dataset", "sample", "center", "reference", "generated", "type_f1", "gene_recall"]
+        table = wandb.Table(columns=cols, data=[[e.get(c) for c in cols] for e in examples[:100]])
+        accelerator.get_tracker("wandb", unwrap=True).log({f"val/{name}": table}, step=step)
 
     train_ds, val_ds = build_datasets(cfg)
     embed_dim = train_ds.slices[0].emb.shape[1]
@@ -216,8 +260,20 @@ def train(cfg: dict) -> Path:
 
     collate = Collator(model.tokenizer, max_length=tcfg.get("max_length", 512))
     nw = tcfg.get("num_workers", 4)
-    train_loader = DataLoader(train_ds, batch_size=tcfg["batch_size"], shuffle=True, collate_fn=collate,
-                              num_workers=nw, drop_last=True, persistent_workers=nw > 0)
+    alpha = cfg["data"].get("sampling_alpha", 1.0)
+    if alpha == 1.0:
+        sampler_kw = {"shuffle": True}
+    else:
+        # 各进程主种子相同 -> 采样序列相同,accelerate 再按 batch 切给各卡
+        w = dataset_balanced_weights(train_ds, alpha)
+        sampler_kw = {"sampler": WeightedRandomSampler(torch.as_tensor(w, dtype=torch.double),
+                                                       num_samples=len(train_ds), replacement=True)}
+        if main:
+            names = np.array([train_ds.slices[si].dataset for si, _ in train_ds.centers])
+            share = {d: round(float(w[names == d].sum() / w.sum()), 3) for d in np.unique(names)}
+            print(f"[data] sampling_alpha={alpha}, dataset shares {share}")
+    train_loader = DataLoader(train_ds, batch_size=tcfg["batch_size"], collate_fn=collate,
+                              num_workers=nw, drop_last=True, persistent_workers=nw > 0, **sampler_kw)
 
     params = [p for p in model.projector.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(params, lr=tcfg["lr"], weight_decay=tcfg.get("weight_decay", 0.0),
@@ -235,14 +291,16 @@ def train(cfg: dict) -> Path:
         n_gen = tcfg.get("n_gen_eval_final" if final else "n_gen_eval", 32)
         gbs_gen = tcfg.get("gen_batch_size", 16)
         g, ex = evaluate_generation(raw, val_ds, n_gen, gbs_gen, accelerator=accelerator)
-        rec = {"step": step, **m, **g}
+        rec = {**m, "val_loss_gap": m["val_loss_shuffled"] - m["val_loss"], **g}
         if final:
             gs, ex_s = evaluate_generation(raw, val_ds, n_gen, gbs_gen, shuffled=True, accelerator=accelerator)
             rec.update(gs)
+            log_samples(step, ex_s, "samples_shuffled")
             if main:
                 with open(out_dir / "samples_final_shuffled.jsonl", "w") as f:
                     f.writelines(json.dumps(e, ensure_ascii=False) + "\n" for e in ex_s)
-        log(split="val", **rec)
+        log("val", step, **rec)
+        log_samples(step, ex, "samples")
         if main:
             with open(out_dir / f"samples_step{step}.jsonl", "w") as f:
                 f.writelines(json.dumps(e, ensure_ascii=False) + "\n" for e in ex)

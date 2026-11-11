@@ -20,6 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 llm = ["torch", "transformers", "peft", "accelerate", "datasets"]
 encoders = ["novae"]
+tracking = ["wandb", "tensorboard"]
 dev = ["pytest", "ruff", "jupyterlab"]
 
 [tool.hatch.build.targets.wheel]
