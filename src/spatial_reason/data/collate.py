@@ -41,12 +41,13 @@ class SliceData:
     domain: np.ndarray
 
 
-def load_slice(dataset: str, sample: str, encoder: str, k: int) -> SliceData:
+def load_slice(dataset: str, sample: str, encoder: str, k: int, with_desc: bool = True) -> SliceData:
+    """with_desc=False 时跳过表达矩阵的归一化(只需要嵌入和邻域的场景,如阶段 1 SFT)。"""
     a = load_sample(dataset, sample)
     emb = load_embeddings(encoder, dataset, sample, adata=a)
     ct = a.obs["cell_type"].astype(object).values if a.obs["cell_type"].notna().any() else None
     return SliceData(dataset=dataset, sample=sample, emb=emb, nb=build_neighborhoods(a.obsm["spatial"], k),
-                     desc=DescriptionBuilder(a, dataset), cell_type=ct,
+                     desc=DescriptionBuilder(a, dataset) if with_desc else None, cell_type=ct,
                      domain=a.obs["domain"].astype(object).values)
 
 
@@ -65,7 +66,9 @@ class Stage0Dataset(Dataset):
         s = self.slices[si]
         idx = s.nb.index[c]
         if self.train:
-            rng = np.random.default_rng((self.seed, self.epoch, i))
+            # 用 torch 的 RNG 取种子:DataLoader 给每个 worker、每个 epoch 设不同的种子(由主种子决定),
+            # 持久化 worker 下也会变化;有放回采样时同一样本每次抽到的模板也不同
+            rng = np.random.default_rng(int(torch.randint(2**31 - 1, (1,)).item()))
             d = s.desc.describe(idx, rng=rng)
         else:
             d = s.desc.describe(idx, template=i % 4)
@@ -80,6 +83,19 @@ class Stage0Dataset(Dataset):
             "meta": {"dataset": s.dataset, "sample": s.sample, "center": int(c),
                      "cell_types": d.cell_types, "genes": d.genes, "center_type": d.center},
         }
+
+
+def dataset_balanced_weights(dataset: Stage0Dataset, alpha: float) -> np.ndarray:
+    """按数据集做温度采样:数据集 d 的总概率 ∝ n_d^alpha,数据集内均匀。
+
+    alpha=1 等于按样本数比例(不平衡);alpha=0 每个数据集等概率;0.5 是常用折中。
+    """
+    names = np.array([dataset.slices[si].dataset for si, _ in dataset.centers])
+    uniq, counts = np.unique(names, return_counts=True)
+    share = counts.astype(float) ** alpha
+    share /= share.sum()
+    per = {u: sh / c for u, sh, c in zip(uniq, share, counts)}
+    return np.array([per[n] for n in names])
 
 
 def sample_centers(slices: list[SliceData], max_per_slice: int | None, seed: int) -> list[tuple[int, int]]:

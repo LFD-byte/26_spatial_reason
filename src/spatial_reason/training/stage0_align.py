@@ -14,9 +14,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from spatial_reason.data.collate import Collator, Stage0Dataset, load_slice, sample_centers
+from spatial_reason.data.collate import (Collator, Stage0Dataset, dataset_balanced_weights, load_slice,
+                                         sample_centers)
 from spatial_reason.data.splits import split_samples
 from spatial_reason.models.spatial_llm import SpatialLLM
 from spatial_reason.utils.logging import JsonlLogger
@@ -259,8 +260,20 @@ def train(cfg: dict) -> Path:
 
     collate = Collator(model.tokenizer, max_length=tcfg.get("max_length", 512))
     nw = tcfg.get("num_workers", 4)
-    train_loader = DataLoader(train_ds, batch_size=tcfg["batch_size"], shuffle=True, collate_fn=collate,
-                              num_workers=nw, drop_last=True, persistent_workers=nw > 0)
+    alpha = cfg["data"].get("sampling_alpha", 1.0)
+    if alpha == 1.0:
+        sampler_kw = {"shuffle": True}
+    else:
+        # 各进程主种子相同 -> 采样序列相同,accelerate 再按 batch 切给各卡
+        w = dataset_balanced_weights(train_ds, alpha)
+        sampler_kw = {"sampler": WeightedRandomSampler(torch.as_tensor(w, dtype=torch.double),
+                                                       num_samples=len(train_ds), replacement=True)}
+        if main:
+            names = np.array([train_ds.slices[si].dataset for si, _ in train_ds.centers])
+            share = {d: round(float(w[names == d].sum() / w.sum()), 3) for d in np.unique(names)}
+            print(f"[data] sampling_alpha={alpha}, dataset shares {share}")
+    train_loader = DataLoader(train_ds, batch_size=tcfg["batch_size"], collate_fn=collate,
+                              num_workers=nw, drop_last=True, persistent_workers=nw > 0, **sampler_kw)
 
     params = [p for p in model.projector.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(params, lr=tcfg["lr"], weight_decay=tcfg.get("weight_decay", 0.0),
