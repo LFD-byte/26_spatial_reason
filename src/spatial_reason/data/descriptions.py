@@ -2,7 +2,7 @@
 
 描述只用细胞类型和表达,不含 niche / domain 标签,避免把下游任务的标签泄漏进对齐阶段。
 
-- 组成:中心 + k 个邻居中占比 >= min_frac 的细胞类型(最多 max_types 个),百分比取整到 5%;
+- 组成:中心 + k 个邻居中占比(Visium 用反卷积比例的平均) >= min_frac 的细胞类型(最多 max_types 个),百分比取整到 5%;
 - 基因:邻域平均 log 表达相对整张切片的效应量 (mean_nb - mean_slice) / sd_slice 最大的基因,
   要求效应量 >= min_effect 且邻域内至少 min_detect 比例的细胞检出;
 - 细胞类型名做轻度规范化(合并编号亚群,如 "Endothelial 2" -> "endothelial cells";
@@ -18,6 +18,7 @@ import anndata as ad
 import numpy as np
 import scipy.sparse as sp
 
+PROPS_KEY = "cell_type_props"  # Visium 反卷积得到的每个 spot 细胞类型比例(DataFrame)
 EXCLUDE_GENE = re.compile(r"^(Blank|NegPrb|NegControl|SystemControl|BLANK)", re.I)
 
 STARMAP_NAMES = {
@@ -43,6 +44,16 @@ MERFISH_NAMES = {
     "OD Immature": "immature oligodendrocytes", "Ambiguous": "unassigned cells",
 }
 
+# DLPFC:spatialDLPFC 单核参考的 cellType_layer(反卷积列名,"/" 已换成 "_")
+DLPFC_NAMES = {
+    "Astro": "astrocytes", "EndoMural": "endothelial and mural cells", "Inhib": "inhibitory neurons",
+    "Micro": "microglia", "OPC": "oligodendrocyte precursor cells", "Oligo": "oligodendrocytes",
+    "Excit_L2_3": "L2/3 excitatory neurons", "Excit_L3": "L3 excitatory neurons",
+    "Excit_L3_4_5": "L3/4/5 excitatory neurons", "Excit_L4": "L4 excitatory neurons",
+    "Excit_L5": "L5 excitatory neurons", "Excit_L5_6": "L5/6 excitatory neurons",
+    "Excit_L6": "L6 excitatory neurons",
+}
+
 
 def display_name(cell_type: str, dataset: str) -> str:
     if dataset == "cosmx_nsclc":
@@ -54,6 +65,8 @@ def display_name(cell_type: str, dataset: str) -> str:
     if dataset == "merfish_hypothalamus":
         base = re.sub(r"\s+\d+$", "", cell_type)
         return MERFISH_NAMES.get(base, base)
+    if dataset == "dlpfc":
+        return DLPFC_NAMES.get(cell_type, cell_type)
     return cell_type
 
 
@@ -102,9 +115,22 @@ class DescriptionBuilder:
         self.min_frac, self.max_types = min_frac, max_types
         self.n_genes, self.min_effect, self.min_detect = n_genes, min_effect, min_detect
 
+        # 软组成(Visium 反卷积比例,obsm["cell_type_props"],列为类型名):邻域组成 = 各 spot 比例的平均,
+        # 中心类型 = 中心 spot 比例最高的类型。硬标签数据集 type_props 为 None,走 bincount。
+        self.type_props: np.ndarray | None = None
+        props = adata.obsm.get(PROPS_KEY) if hasattr(adata.obsm, "get") else None
         ct = adata.obs["cell_type"]
-        self.has_cell_type = ct.notna().any()
-        if self.has_cell_type:
+        if props is not None:
+            cols = [display_name(str(c), dataset) for c in props.columns]
+            self.type_names, inv = np.unique(cols, return_inverse=True)
+            P = np.zeros((adata.n_obs, len(self.type_names)), dtype=np.float64)
+            np.add.at(P.T, inv, np.asarray(props, dtype=np.float64).T)  # 同名列合并
+            self.type_props = P / np.maximum(P.sum(1, keepdims=True), 1e-12)
+            self.type_codes = P.argmax(1)
+            self.has_cell_type = True
+        else:
+            self.has_cell_type = ct.notna().any()
+        if self.has_cell_type and self.type_props is None:
             names = np.array([display_name(str(c), dataset) if isinstance(c, str) else "unassigned cells"
                               for c in ct.astype(object)])
             self.type_names, self.type_codes = np.unique(names, return_inverse=True)
@@ -122,9 +148,19 @@ class DescriptionBuilder:
         self.mu = mean
         self.sd = np.sqrt(np.maximum(sq - mean ** 2, 1e-12))
 
+    @property
+    def soft(self) -> bool:
+        return self.type_props is not None
+
+    def type_frac(self, idx: np.ndarray | None = None) -> np.ndarray:
+        """邻域(idx)或整张切片(idx=None)中各类型的占比。"""
+        if self.type_props is not None:
+            return (self.type_props if idx is None else self.type_props[idx]).mean(0)
+        codes = self.type_codes if idx is None else self.type_codes[idx]
+        return np.bincount(codes, minlength=len(self.type_names)) / len(codes)
+
     def composition(self, idx: np.ndarray) -> list[tuple[str, int]]:
-        counts = np.bincount(self.type_codes[idx], minlength=len(self.type_names))
-        frac = counts / len(idx)
+        frac = self.type_frac(idx)
         order = np.argsort(-frac, kind="stable")
         out = []
         for j in order[: self.max_types]:

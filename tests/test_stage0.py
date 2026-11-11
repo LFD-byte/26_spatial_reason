@@ -55,7 +55,28 @@ def test_description_composition_and_genes():
     assert "L" not in d.text.split()  # 不泄漏 domain 标签
 
 
+def test_soft_composition_from_deconvolution():
+    """Visium:obsm['cell_type_props'] 存在时,组成取各 spot 比例的平均,中心类型取比例最高者。"""
+    from spatial_reason.evaluation.enrichment import EnrichmentCalculator
+
+    a = toy_adata()
+    left = a.obsm["spatial"][:, 0] < 50
+    a.obs["cell_type"] = None
+    a.obsm["cell_type_props"] = pd.DataFrame(
+        {"Excit_L4": np.where(left, 0.7, 0.1), "Oligo": np.where(left, 0.3, 0.9)}, index=a.obs_names)
+    nb = build_neighborhoods(a.obsm["spatial"], k=16)
+    b = DescriptionBuilder(a, "dlpfc")
+    assert b.soft and b.has_cell_type
+    i = int(np.argmin(np.abs(a.obsm["spatial"][:, 0] - 10)))
+    assert b.describe(nb.index[i], template=0).cell_types == [("L4 excitatory neurons", 70),
+                                                              ("oligodendrocytes", 30)]
+    st = EnrichmentCalculator(b).stats(nb.index[i])
+    assert st.center_type == "L4 excitatory neurons"
+    assert st.enriched_types == ["L4 excitatory neurons"]  # 0.7 vs 切片约 0.4,比值 >= 1.5
+
+
 def test_display_names():
+    assert display_name("Excit_L3_4_5", "dlpfc") == "L3/4/5 excitatory neurons"
     assert display_name("tumor 9", "cosmx_nsclc") == "tumor cells"
     assert display_name("Endothelial 2", "merfish_hypothalamus") == "endothelial cells"
     assert display_name("eL2/3", "starmap") == "L2/3 excitatory neurons"

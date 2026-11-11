@@ -2,7 +2,7 @@
 
 统一格式:
 - X:原文件中的表达矩阵(不做归一化,归一化交给编码器);var_names 为基因 symbol
-- obs['cell_type']:细胞类型(字符串);Visium 为 spot,暂无,需后续反卷积
+- obs['cell_type']:细胞类型(字符串);Visium 为 spot 的主导类型,比例在 obsm['cell_type_props'](反卷积)
 - obs['domain']:空间域真值(字符串);缺失为 NaN
 - obs['sample'] / obs['donor'] / obs['platform']
 - obsm['spatial']:二维坐标,float64
@@ -104,6 +104,10 @@ def prepare_dataset(
     rows = []
     for fname, (sample, donor) in spec.samples.items():
         a = standardize(ad.read_h5ad(raw_dir / fname), spec, sample, donor)
+        if name == "dlpfc":  # 反卷积比例(scripts/01b_deconvolve_dlpfc.py),重跑预处理时保留
+            from spatial_reason.data.deconvolve import attach_props
+
+            attach_props(a, sample)
         a.write_h5ad(out_dir / f"{sample}.h5ad", compression="gzip")
         rows.append({
             "dataset": name,

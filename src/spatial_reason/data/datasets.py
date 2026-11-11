@@ -15,7 +15,9 @@ DATASET_INFO = {
                              "platform": "MERFISH"},
     # 166 基因的 STARmap(BZ5/9/14)来自小鼠内侧前额叶皮层(mPFC),见 LLMiniST 配置
     "starmap": {"tissue": "mouse medial prefrontal cortex", "species": "mouse", "platform": "STARmap"},
-    "dlpfc": {"tissue": "human dorsolateral prefrontal cortex", "species": "human", "platform": "Visium"},
+    # Visium:每个观测是 55 µm 的 spot(含多个细胞),细胞类型比例来自 scripts/01b_deconvolve_dlpfc.py
+    "dlpfc": {"tissue": "human dorsolateral prefrontal cortex", "species": "human", "platform": "Visium",
+              "unit": "spot"},
 }
 
 # 空间域 / niche 标签:原始值 -> 给 LLM 看的名称。

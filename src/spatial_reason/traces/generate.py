@@ -27,7 +27,7 @@ TEACHER_SYSTEM = (
     "neighborhood. You only use evidence that is present in the data you are given."
 )
 
-TEACHER_USER = """A cell neighborhood (a center cell and its {k} nearest neighbors) from a {platform} section of {tissue}.
+TEACHER_USER = """A {unit} neighborhood (a center {unit} and its {k} nearest neighbors) from a {platform} section of {tissue}.
 
 Candidate labels:
 {candidates}
@@ -74,14 +74,22 @@ def text_only_request(rec: dict) -> dict:
     return {k: v for k, v in rec.items() if k != "messages"} | {"messages": msgs}
 
 
-def neighborhood_text(st: NeighborhoodStats, has_cell_type: bool) -> str:
-    """把富集统计写成文本(教师输入;也用于纯文本 Qwen 基线)。"""
+def neighborhood_text(st: NeighborhoodStats, has_cell_type: bool, spot: bool = False) -> str:
+    """把富集统计写成文本(教师输入;也用于纯文本 Qwen 基线)。
+
+    spot=True(Visium):组成来自反卷积的 spot 比例,措辞相应改为"估计"。
+    """
     lines = []
     if has_cell_type:
-        lines.append(f"- Center cell type: {st.center_type}")
+        if spot:
+            lines.append(f"- Dominant cell type of the center spot (deconvolution estimate): {st.center_type}")
+        else:
+            lines.append(f"- Center cell type: {st.center_type}")
         comp = "; ".join(f"{n} {100 * f:.0f}% (section-wide {100 * st.slice_composition[n]:.0f}%)"
                          for n, f in st.composition.items())
-        lines.append(f"- Cell-type composition of the neighborhood: {comp}")
+        what = ("Estimated cell-type composition of the neighborhood (deconvolution of spot expression)"
+                if spot else "Cell-type composition of the neighborhood")
+        lines.append(f"- {what}: {comp}")
         # 明确哪些类型算"富集",否则教师常把组成表里未富集的类型写进 <evidence>,被过滤掉
         enr = "; ".join(st.enriched_types) if st.enriched_types else "none"
         lines.append(f"- Cell types enriched in the neighborhood (the only ones allowed in <evidence>): {enr}")
@@ -135,8 +143,9 @@ def build_requests(cfg: dict, split: str, out_path: Path | str) -> int:
                     st = calc.stats(s.nb.index[c], top_genes=tcfg.get("top_genes", 10))
                     label = domain_name(ds, s.domain[c])
                     user = TEACHER_USER.format(
-                        k=k, platform=info["platform"], tissue=info["tissue"],
-                        candidates=format_candidates(cands), data=neighborhood_text(st, s.desc.has_cell_type),
+                        k=k, unit=info.get("unit", "cell"), platform=info["platform"], tissue=info["tissue"],
+                        candidates=format_candidates(cands),
+                        data=neighborhood_text(st, s.desc.has_cell_type, spot=s.desc.soft),
                         label=label, fmt=OUTPUT_FORMAT)
                     rec = {"id": f"{ds}|{sname}|{c}", "dataset": ds, "sample": sname, "center": int(c),
                            "label": label, "candidates": cands, "stats": st.to_dict(),
