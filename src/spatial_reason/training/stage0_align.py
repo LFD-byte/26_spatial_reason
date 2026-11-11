@@ -20,6 +20,7 @@ from spatial_reason.data.collate import (Collator, Stage0Dataset, dataset_balanc
                                          sample_centers)
 from spatial_reason.data.splits import split_samples
 from spatial_reason.models.spatial_llm import SpatialLLM
+from spatial_reason.training.checkpoint import is_done, load_checkpoint, mark_done, save_checkpoint
 from spatial_reason.utils.logging import JsonlLogger
 from spatial_reason.utils.seed import set_seed
 
@@ -209,6 +210,9 @@ def train(cfg: dict) -> Path:
     accum = gbs // (tcfg["batch_size"] * world)
     report_to = _report_to(tcfg.get("report_to", "none"))
     out_dir = Path(tcfg["output_dir"])
+    if is_done(out_dir):
+        print(f"[skip] {out_dir} 已训练完成(存在 DONE);要重训请换 output_dir 或删除 DONE")
+        return out_dir
     accelerator = Accelerator(gradient_accumulation_steps=accum, log_with=report_to or None,
                               project_dir=str(out_dir))
     assert accelerator.num_processes == world
@@ -313,8 +317,22 @@ def train(cfg: dict) -> Path:
         if main:
             raw.save_projector(out_dir / name, {"step": step, "config": cfg})
 
-    best = run_eval(0)
-    step, run_loss, n_micro = 0, torch.zeros((), device=accelerator.device), 0
+    save_every = tcfg.get("save_every", 250)
+
+    def checkpoint(step: int):
+        save_checkpoint(out_dir, accelerator, raw, opt, sched, step, {"best": best})
+
+    resumed = load_checkpoint(out_dir, raw, opt, sched, tcfg["seed"])
+    if resumed:
+        step, st = resumed
+        best = st["best"]
+        log(split="resume", step=step, best=best)
+        if main:
+            print(f"[resume] 从 step {step}/{total} 继续(best val_loss {best:.4f})")
+    else:
+        best = run_eval(0)
+        step = 0
+    run_loss, n_micro = torch.zeros((), device=accelerator.device), 0
     ddp_model.train()
     while step < total:
         train_ds.epoch += 1
@@ -346,9 +364,12 @@ def train(cfg: dict) -> Path:
                 if vl < best:
                     best = vl
                     save("projector_best.pt", step)
+                checkpoint(step)
+            elif step % save_every == 0:
+                checkpoint(step)
             if step >= total:
                 break
-    accelerator.wait_for_everyone()
+    mark_done(out_dir, accelerator, f"best val_loss {best:.4f}")
     if main:
         print(f"[done] best val_loss {best:.4f} -> {out_dir}")
     accelerator.end_training()

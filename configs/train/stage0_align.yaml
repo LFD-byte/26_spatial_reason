@@ -36,6 +36,7 @@ train:
   num_workers: 4
   log_every: 10
   eval_every: 250
+  save_every: 250          # 断点 checkpoint 间隔(优化器步);评测后也会保存
   eval_max_batches: null   # val 全部 600 个样本
   n_gen_eval: 48
   n_gen_eval_final: 600

@@ -61,6 +61,7 @@ train:
   num_workers: 4
   log_every: 10
   eval_every: 200
+  save_every: 50           # 断点 checkpoint 间隔(优化器步);评测后也会保存
   n_gen_eval: 120
   n_gen_eval_final: 600
   gen_batch_size: 16
