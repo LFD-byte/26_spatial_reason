@@ -1,7 +1,7 @@
 """过滤轨迹:结论正确,且引用的细胞 / 基因确实在输入中富集。
 
 拒绝原因(可多条):
-- format:缺少 reasoning / evidence / answer 或格式不对;
+- format:缺少 reasoning / evidence / answer 或格式不对(先经 repair_format 修复可挽回的情况);
 - wrong_answer:答案不是真值标签;
 - no_evidence:evidence 为空;
 - type_not_enriched / gene_not_enriched:evidence 中的细胞类型 / 基因在该邻域并不富集;
@@ -24,8 +24,21 @@ def _norm_type(s: str) -> str:
     return re.sub(r"s$", "", s)
 
 
+_PLACEHOLDER = re.compile(r"^<reasoning>\s*step-by-step reasoning grounded in the observed data\s*</reasoning>\s*(.+?)\s*(?=<evidence>)",
+                          re.S | re.I)
+
+
+def repair_format(text: str) -> str:
+    """教师约 16% 的输出把格式模板里的占位符原样抄成 <reasoning>…</reasoning>,真正的推理写在标签外面。
+    内容本身没问题,把标签外的推理移回 <reasoning> 里。"""
+    m = _PLACEHOLDER.match(text.strip())
+    if not m:
+        return text
+    return f"<reasoning>{m.group(1)}</reasoning>\n" + text.strip()[m.end():]
+
+
 def check_trace(text: str, rec: dict, panel_genes: set[str]) -> tuple[bool, list[str], dict]:
-    p = parse_output(text)
+    p = parse_output(repair_format(text))
     reasons = []
     if not p.well_formed or not p.reasoning:
         reasons.append("format")
@@ -54,6 +67,7 @@ def check_trace(text: str, rec: dict, panel_genes: set[str]) -> tuple[bool, list
 
 def canonical_target(text: str, label: str) -> str:
     """把通过过滤的教师输出整理成学生的 SFT 目标:统一换行,答案写成候选标签的标准形式。"""
+    text = repair_format(text)
     p = parse_output(text)
     ev = f"cell types: {'; '.join(p.evidence_types) or 'none'} | genes: {'; '.join(p.evidence_genes) or 'none'}"
     return f"<reasoning>{p.reasoning}</reasoning>\n<evidence>{ev}</evidence>\n<answer>{label}</answer>"
