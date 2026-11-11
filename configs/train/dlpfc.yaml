@@ -1,0 +1,10 @@
+# DLPFC(Visium,spot 级;细胞类型比例来自 scripts/01b_deconvolve_dlpfc.py)。
+# 叠加在 stage0_align.yaml / stage1_sft.yaml 之后使用,例如只为 DLPFC 构造教师请求:
+#   python scripts/05_build_teacher_prompts.py --config configs/train/stage1_sft.yaml configs/train/dlpfc.yaml \
+#       --datasets dlpfc --override data.encoder=pca traces.dir=data/traces/qwen3_32b_dlpfc
+data:
+  datasets:
+    dlpfc:
+      val_samples: ["151675", "151676"]   # 与 configs/data/dlpfc.yaml 一致
+      traces_per_label_train: 600         # 7 层(Br5595 没有 Layer1/2)
+      traces_per_label_val: 40

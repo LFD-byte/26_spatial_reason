@@ -43,17 +43,16 @@ class EnrichmentCalculator:
     def __init__(self, desc: DescriptionBuilder, criteria: EnrichmentCriteria | None = None):
         self.desc, self.c = desc, criteria or EnrichmentCriteria()
         if desc.has_cell_type:
-            counts = np.bincount(desc.type_codes, minlength=len(desc.type_names))
-            self.slice_frac = counts / counts.sum()
+            self.slice_frac = desc.type_frac()
 
     def stats(self, idx: np.ndarray, top_genes: int = 10) -> NeighborhoodStats:
         d, c = self.desc, self.c
         comp, slice_comp, enriched_types, center = {}, {}, [], None
         if d.has_cell_type:
-            frac = np.bincount(d.type_codes[idx], minlength=len(d.type_names)) / len(idx)
+            frac = d.type_frac(idx)
             center = str(d.type_names[d.type_codes[idx[0]]])
             for j in np.argsort(-frac):
-                if frac[j] <= 0:
+                if frac[j] < 0.005:  # 软组成(反卷积)里几乎都 >0,极小占比不列出
                     break
                 name = str(d.type_names[j])
                 comp[name] = round(float(frac[j]), 3)

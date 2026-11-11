@@ -8,7 +8,10 @@
 #   3. 过滤轨迹            sft_*.jsonl 比 teacher_*.jsonl 新则跳过
 #   4. SFT(双卡 DDP)      output_dir 有 DONE 则跳过;有 checkpoint.pt 则续训
 #
-# 可用环境变量覆盖:CONFIG, TRACES_DIR, TEACHER_MODEL, VLLM_PY, TRAIN_ENV
+# 可用环境变量覆盖:CONFIG, TRACES_DIR, TEACHER_MODEL, VLLM_PY, TRAIN_ENV;
+# OVERRIDES 传给 SFT 的额外配置覆盖,例如换编码器:
+#   OVERRIDES="data.encoder=pca model.init_projector=outputs/stage0/pca_k32_bal/projector_best.pt \
+#              train.output_dir=outputs/stage1/pca_qwen3_32b_teacher" bash scripts/run_stage1.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,6 +20,7 @@ TRACES_DIR=${TRACES_DIR:-data/traces/qwen3_32b}
 TEACHER_MODEL=${TEACHER_MODEL:-data/models/Qwen3-32B}
 VLLM_PY=${VLLM_PY:-$HOME/software/anaconda3/envs/vllm/bin/python}
 TRAIN_ENV=${TRAIN_ENV:-$HOME/software/anaconda3/envs/spatial_reason}
+OVERRIDES=${OVERRIDES:-}
 PY="$TRAIN_ENV/bin/python"
 export PYTHONPATH=src${PYTHONPATH:+:$PYTHONPATH}
 
@@ -62,6 +66,6 @@ fi
 echo "[$(ts)] 4/4 Stage 1 SFT(有 checkpoint 自动续训)"
 sleep 10  # 等 vLLM 释放显存
 "$TRAIN_ENV/bin/accelerate" launch --config_file configs/accelerate/ddp_2gpu.yaml \
-    scripts/06_train.py --config "$CONFIG" --override "traces.dir=$TRACES_DIR"
+    scripts/06_train.py --config "$CONFIG" --override "traces.dir=$TRACES_DIR" $OVERRIDES
 
 echo "[$(ts)] 全部完成"

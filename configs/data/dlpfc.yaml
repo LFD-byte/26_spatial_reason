@@ -1,3 +1,6 @@
 name: dlpfc
 platform: visium
 split_by: slice   # slice | donor | platform
+# 留出 Br8100 的相邻切片对 151675/151676(相邻 10 µm 的两张都留出,避免几乎相同的组织进训练);
+# 其余 10 张训练。不在训练配置里的数据集(如 PCA 编码器拟合)从这里取划分。
+val_samples: ["151675", "151676"]
