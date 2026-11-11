@@ -8,7 +8,9 @@
     python scripts/09_probe_encoders.py probe
 
 表示:
-- novae        Novae 嵌入(64 维,带空间上下文)
+- novae        Novae 零样本嵌入(64 维,带空间上下文)
+- novae_ft     在训练切片上自监督微调后的 Novae(scripts/02b_finetune_novae.py)
+- novae_scratch 不用预训练权重、只在训练切片上从头训练的 Novae(同上,--from-scratch)
 - pca          normalize_total + log1p 表达的 PCA(64 维,在训练切片上拟合)
 - novae+pca    两者拼接
 - nicheformer  Nicheformer 嵌入(512 维;只在 --nf-datasets 上)
@@ -168,9 +170,17 @@ def cmd_probe(a) -> None:
         types = sorted({t for sl in slices.values() for t in sl.adata.obs["cell_type"].astype(str)})
         for s, sl in slices.items():
             sl.reps["novae"] = load_embeddings("novae", ds, s, adata=sl.adata)
+            for extra in ("novae_ft", "novae_scratch"):
+                try:
+                    sl.reps[extra] = load_embeddings(extra, ds, s, adata=sl.adata)
+                except FileNotFoundError:
+                    pass
             oracle_comp(sl, types)
         fit_pca(slices, {r["sample"] for r in reqs[ds]["train"]})
         reps = ["novae", "pca", "novae+pca", "oracle_comp"]
+        for i, extra in enumerate(("novae_ft", "novae_scratch")):
+            if all(extra in sl.reps for sl in slices.values()):
+                reps.insert(1 + i, extra)
         if all(load_nf(ds, slices[s], s) for s in samples):
             reps.insert(3, "nicheformer")
         ytr = [r["label"] for r in reqs[ds]["train"]]
