@@ -24,6 +24,7 @@ from spatial_reason.data.datasets import DATASET_INFO
 from spatial_reason.inference.generate import OUTPUT_FORMAT, match_label, parse_output
 from spatial_reason.models.spatial_llm import CELL_TOKEN, SpatialLLM
 from spatial_reason.traces.filter import _norm_type
+from spatial_reason.training.checkpoint import is_done, load_checkpoint, mark_done, save_checkpoint
 from spatial_reason.training.stage0_align import _flatten, _move, _report_to, _shuffle_cells, lr_lambda
 from spatial_reason.utils.logging import JsonlLogger
 from spatial_reason.utils.seed import set_seed
@@ -180,6 +181,9 @@ def train(cfg: dict) -> Path:
     accum = gbs // (tcfg["batch_size"] * world)
     report_to = _report_to(tcfg.get("report_to", "none"))
     out_dir = Path(tcfg["output_dir"])
+    if is_done(out_dir):
+        print(f"[skip] {out_dir} 已训练完成(存在 DONE);要重训请换 output_dir 或删除 DONE")
+        return out_dir
     accelerator = Accelerator(gradient_accumulation_steps=accum, log_with=report_to or None, project_dir=str(out_dir))
     acc_set_seed(tcfg["seed"])
     set_seed(tcfg["seed"])
@@ -270,9 +274,22 @@ def train(cfg: dict) -> Path:
             raw.save_projector(out_dir / tag / "projector.pt", {"step": step, "config": cfg})
             raw.save_lora(out_dir / tag / "lora")
 
-    run_eval(0)
-    best = -1.0  # 训练后第一次评测一定保存 best
-    step, run_loss, n_micro = 0, torch.zeros((), device=accelerator.device), 0
+    save_every = tcfg.get("save_every", 100)
+
+    def checkpoint(step: int):
+        save_checkpoint(out_dir, accelerator, raw, opt, sched, step, {"best": best})
+
+    resumed = load_checkpoint(out_dir, raw, opt, sched, tcfg["seed"])
+    if resumed:
+        step, st = resumed
+        best = st["best"]
+        log("resume", step, best=best)
+        if main:
+            print(f"[resume] 从 step {step}/{total} 继续(best val acc {best:.4f})")
+    else:
+        run_eval(0)
+        step, best = 0, -1.0  # 训练后第一次评测一定保存 best
+    run_loss, n_micro = torch.zeros((), device=accelerator.device), 0
     ddp_model.train()
     while step < total:
         for batch in train_loader:
@@ -302,9 +319,12 @@ def train(cfg: dict) -> Path:
                 if acc > best:
                     best = acc
                     save("best", step)
+                checkpoint(step)
+            elif step % save_every == 0:
+                checkpoint(step)
             if step >= total:
                 break
-    accelerator.wait_for_everyone()
+    mark_done(out_dir, accelerator, f"best val acc {best:.4f}")
     if main:
         print(f"[done] best val acc {best:.4f} -> {out_dir}")
     accelerator.end_training()
