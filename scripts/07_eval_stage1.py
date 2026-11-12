@@ -32,7 +32,8 @@ def main() -> None:
     ds = Stage1Dataset(val_all, slices, cfg["data"]["k_neighbors"])
     embed_dim = next(iter(slices.values())).emb.shape[1]
     model = SpatialLLM(mcfg["llm"], embed_dim=embed_dim, use_position=mcfg.get("use_position", True),
-                       gradient_checkpointing=False, device=acc.device, lora=mcfg["lora"])
+                       gradient_checkpointing=False, device=acc.device, lora=mcfg["lora"],
+                       gene_encoder=mcfg.get("gene_encoder"))
     kw = dict(n=10 ** 9, batch_size=args.batch_size, max_new_tokens=tcfg.get("max_new_tokens", 384), accelerator=acc)
 
     for tag in args.tags:

@@ -21,9 +21,12 @@ class SpatialLLM(nn.Module):
     def __init__(self, llm_path: str | Path, embed_dim: int, use_position: bool = True,
                  n_freqs: int = 8, freeze_llm: bool = True, dtype: torch.dtype = torch.bfloat16,
                  gradient_checkpointing: bool = False, device: str | torch.device = "cuda",
-                 lora: dict | None = None):
+                 lora: dict | None = None, gene_encoder: dict | None = None):
         """lora:None 表示 LLM 完全冻结(阶段 0);给出 {r, alpha, dropout, target_modules} 时
-        基座冻结、只训练 LoRA(阶段 1/2)。"""
+        基座冻结、只训练 LoRA(阶段 1/2)。
+
+        gene_encoder:方案 B(data.encoder=expr)时给出 {vocab, dim, hidden, text_layer},
+        投影层前加可学习的基因集合编码器,基因名的文本表示取自本 LLM(见 gene_text_embeddings)。"""
         super().__init__()
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -53,8 +56,39 @@ class SpatialLLM(nn.Module):
             self.llm.eval()
 
         hidden = self.llm.config.hidden_size
-        self.projector = CellProjector(embed_dim, hidden, use_position=use_position, n_freqs=n_freqs).to(device)
+        gene_kw = {}
+        if gene_encoder:
+            from spatial_reason.encoders.expression import load_vocab
+
+            vocab = load_vocab(gene_encoder.get("vocab", "data/models/expr/vocab.json"))
+            gene_kw = {"gene_text": self.gene_text_embeddings(vocab, gene_encoder.get("text_layer", 24)),
+                       "gene_dim": gene_encoder.get("dim", 256), "gene_hidden": gene_encoder.get("hidden", 512)}
+        self.projector = CellProjector(embed_dim, hidden, use_position=use_position, n_freqs=n_freqs,
+                                       **gene_kw).to(device)
         self._calibrate_scale()
+
+    @torch.no_grad()
+    def gene_text_embeddings(self, genes: list[str], layer: int = 24, batch_size: int = 128) -> torch.Tensor:
+        """每个基因名在冻结 LLM 中的表示:prompt "The gene {symbol}" 最后一个 token 在第 layer 层的隐藏状态。
+
+        用中间层而不是词嵌入:基因名常被切成多个子词("CD8A" -> "CD", "8", "A"),
+        中间层的最后一个 token 已经把整个名字和 LLM 对它的知识聚合在一起。
+        """
+        base = self.llm.get_base_model() if hasattr(self.llm, "get_base_model") else self.llm
+        dev = base.get_input_embeddings().weight.device
+        side = self.tokenizer.padding_side
+        self.tokenizer.padding_side = "right"  # 右侧 padding,位置编码与单独输入时一致
+        try:
+            out = []
+            for i in range(0, len(genes), batch_size):
+                enc = self.tokenizer([f"The gene {g}" for g in genes[i:i + batch_size]], return_tensors="pt",
+                                     padding=True, add_special_tokens=False).to(dev)
+                hs = base(**enc, output_hidden_states=True).hidden_states[layer]
+                last = enc["attention_mask"].sum(1) - 1
+                out.append(hs[torch.arange(len(last), device=dev), last].float().cpu())
+        finally:
+            self.tokenizer.padding_side = side
+        return torch.cat(out)
 
     @property
     def device(self) -> torch.device:

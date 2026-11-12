@@ -6,5 +6,6 @@ data:
   datasets:
     dlpfc:
       val_samples: ["151675", "151676"]   # 与 configs/data/dlpfc.yaml 一致
+      max_centers_per_sample: null        # stage 0:全部 spot(每张约 3.5k-4.8k)
       traces_per_label_train: 600         # 7 层(Br5595 没有 Layer1/2)
       traces_per_label_val: 40
