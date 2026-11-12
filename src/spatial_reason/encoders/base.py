@@ -36,6 +36,7 @@ def obs_checksum(adata: ad.AnnData) -> str:
 
 class SpatialEncoder(ABC):
     name: str = "base"
+    dtype = np.float32  # 缓存精度;表达输入(expr)用 float16
 
     @abstractmethod
     def encode(self, adata: ad.AnnData, dataset: str) -> tuple[np.ndarray, dict]:
@@ -53,7 +54,7 @@ class SpatialEncoder(ABC):
         z, info = self.encode(adata, dataset)
         assert z.shape[0] == adata.n_obs and np.isfinite(z).all(), "嵌入行数不符或含 NaN/inf"
         path.parent.mkdir(parents=True, exist_ok=True)
-        np.save(path, z.astype(np.float32))
+        np.save(path, z.astype(self.dtype))
         info = {"encoder": self.name, "dataset": dataset, "sample": sample, "shape": list(z.shape),
                 "obs_checksum": obs_checksum(adata), **info}
         path.with_suffix(".json").write_text(json.dumps(info, indent=2))

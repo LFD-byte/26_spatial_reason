@@ -1,0 +1,14 @@
+# 方案 B:叠加在 stage0_align.yaml / stage1_sft.yaml 之后,把冻结编码器换成可学习的基因集合编码器。
+#   accelerate launch ... scripts/06_train.py --config configs/train/stage0_align.yaml configs/train/expr.yaml \
+#       --override train.output_dir=outputs/stage0/expr_k32_bal
+# 输入是共享基因空间(1210 个基因)里的标准化表达(scripts/02_extract_embeddings.py --encoder expr),
+# 编码器属于投影层,阶段 0 起就和投影层一起训练。
+data:
+  encoder: expr
+
+model:
+  gene_encoder:
+    vocab: data/models/expr/vocab.json
+    dim: 256          # 编码器输出(投影层输入)维度
+    hidden: 512       # 基因嵌入维度
+    text_layer: 24    # 基因名文本表示取 Qwen3-4B 第 24 / 36 层

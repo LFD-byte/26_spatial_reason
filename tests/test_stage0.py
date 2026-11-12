@@ -152,3 +152,41 @@ def test_spatial_llm_injects_and_only_projector_trains(tiny_llm):
     b2 = dict(b, cell_emb=b["cell_emb"][:1])  # 占位符数与细胞数不符应报错
     with pytest.raises(ValueError):
         m.build_inputs_embeds(b2["input_ids"], b2["cell_emb"], b2["rel_pos"][:1])
+
+
+def test_gene_set_encoder_ignores_unmeasured_genes():
+    from spatial_reason.models.projector import GeneSetEncoder
+
+    enc = GeneSetEncoder(torch.randn(10, 16), dim=8, hidden=12)
+    assert torch.all(enc.residual == 0)  # 残差零初始化:初始基因嵌入完全由基因名决定
+    x = torch.randn(2, 5, 10)
+    x[..., 7:] = 0  # 这个 panel 没测后 3 个基因
+    out = enc(x)
+    assert out.shape == (2, 5, 8)
+    with torch.no_grad():
+        enc.residual[7:] += 5.0  # 没测的基因的嵌入不影响输出
+    assert torch.allclose(enc(x), out, atol=1e-5)
+    proj = CellProjector(embed_dim=10, llm_dim=32, gene_text=torch.randn(10, 16), gene_dim=8)
+    assert proj(x, torch.randn(2, 5, 2)).shape == (2, 5, 32)
+    with pytest.raises(ValueError):
+        CellProjector(embed_dim=11, llm_dim=32, gene_text=torch.randn(10, 16))
+
+
+def test_spatial_llm_gene_encoder_trains_end_to_end(tiny_llm, tmp_path):
+    import json
+
+    from spatial_reason.models.spatial_llm import CELL_TOKEN, SpatialLLM
+
+    vocab = tmp_path / "vocab.json"
+    vocab.write_text(json.dumps({"genes": ["CD8A", "GAD1", "PTPRC", "MBP"]}))
+    m = SpatialLLM(tiny_llm, embed_dim=4, device="cpu", dtype=torch.float32,
+                   gene_encoder={"vocab": str(vocab), "dim": 8, "hidden": 12, "text_layer": 1})
+    t = m.projector.gene_encoder.text
+    assert t.shape[0] == 4 and not torch.allclose(t[0], t[1])  # 不同基因名的文本表示不同
+    batch = [{"cell_emb": torch.randn(5, 4), "rel_pos": torch.randn(5, 2), "prompt": "x " + CELL_TOKEN * 5,
+              "target": "y", "meta": {}} for _ in range(2)]
+    b = Collator(m.tokenizer)(batch)
+    m(b["input_ids"], b["attention_mask"], b["cell_emb"], b["rel_pos"], labels=b["labels"]).loss.backward()
+    assert all(p.grad is None for p in m.llm.parameters())
+    assert all(p.grad is not None for p in m.projector.gene_encoder.parameters())
+    assert "gene_encoder.text" not in m.projector.state_dict()  # 文本表示不存盘,构造时重算

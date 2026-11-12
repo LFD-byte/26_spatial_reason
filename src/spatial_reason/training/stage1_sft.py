@@ -210,7 +210,7 @@ def train(cfg: dict) -> Path:
     embed_dim = next(iter(slices.values())).emb.shape[1]
     model = SpatialLLM(mcfg["llm"], embed_dim=embed_dim, use_position=mcfg.get("use_position", True),
                        gradient_checkpointing=mcfg.get("gradient_checkpointing", True),
-                       device=accelerator.device, lora=mcfg["lora"])
+                       device=accelerator.device, lora=mcfg["lora"], gene_encoder=mcfg.get("gene_encoder"))
     if mcfg.get("init_projector"):
         ck = model.load_projector(mcfg["init_projector"])
         if main:

@@ -255,7 +255,11 @@ def train(cfg: dict) -> Path:
     embed_dim = train_ds.slices[0].emb.shape[1]
     model = SpatialLLM(mcfg["llm"], embed_dim=embed_dim, use_position=mcfg.get("use_position", True),
                        gradient_checkpointing=mcfg.get("gradient_checkpointing", False),
-                       device=accelerator.device)
+                       device=accelerator.device, gene_encoder=mcfg.get("gene_encoder"))
+    if mcfg.get("init_projector"):  # 新数据集(如 DLPFC)从已对齐的投影层继续,而不是从头训练
+        ck = model.load_projector(mcfg["init_projector"])
+        if main:
+            print(f"[model] projector <- {mcfg['init_projector']} (step {ck.get('step')})")
     if main:
         n_params = sum(p.numel() for p in model.projector.parameters())
         print(f"[model] projector params {n_params / 1e6:.2f}M, output scale {model.projector.scale.item():.4f}")
