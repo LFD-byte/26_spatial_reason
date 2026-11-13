@@ -16,8 +16,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from spatial_reason.data.collate import (Collator, Stage0Dataset, dataset_balanced_weights, load_slice,
-                                         sample_centers)
+from spatial_reason.data.collate import (Collator, Stage0Dataset, dataset_balanced_weights, dataset_boost,
+                                         load_slice, sample_centers)
 from spatial_reason.data.splits import split_samples
 from spatial_reason.models.spatial_llm import SpatialLLM
 from spatial_reason.training.checkpoint import is_done, load_checkpoint, mark_done, save_checkpoint
@@ -269,11 +269,12 @@ def train(cfg: dict) -> Path:
     collate = Collator(model.tokenizer, max_length=tcfg.get("max_length", 512))
     nw = tcfg.get("num_workers", 4)
     alpha = cfg["data"].get("sampling_alpha", 1.0)
-    if alpha == 1.0:
+    boost = dataset_boost(cfg["data"])
+    if alpha == 1.0 and set(boost.values()) == {1.0}:
         sampler_kw = {"shuffle": True}
     else:
         # 各进程主种子相同 -> 采样序列相同,accelerate 再按 batch 切给各卡
-        w = dataset_balanced_weights(train_ds, alpha)
+        w = dataset_balanced_weights(train_ds, alpha, boost)
         sampler_kw = {"sampler": WeightedRandomSampler(torch.as_tensor(w, dtype=torch.double),
                                                        num_samples=len(train_ds), replacement=True)}
         if main:

@@ -19,7 +19,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
-from spatial_reason.data.collate import Collator, load_slice
+from spatial_reason.data.collate import Collator, dataset_boost, load_slice, sampling_weights
 from spatial_reason.data.datasets import DATASET_INFO
 from spatial_reason.inference.generate import OUTPUT_FORMAT, match_label, parse_output
 from spatial_reason.models.spatial_llm import CELL_TOKEN, SpatialLLM
@@ -224,9 +224,9 @@ def train(cfg: dict) -> Path:
     collate = Collator(model.tokenizer, max_length=tcfg.get("max_length", 1024))
     alpha = cfg["data"].get("sampling_alpha", 1.0)
     names = np.array([r["dataset"] for r in train_recs])
-    uniq, counts = np.unique(names, return_counts=True)
-    share = counts.astype(float) ** alpha / (counts.astype(float) ** alpha).sum()
-    w = np.array([dict(zip(uniq, share / counts))[n] for n in names])
+    w = sampling_weights(names, alpha, dataset_boost(cfg["data"]))
+    uniq = np.unique(names)
+    share = np.array([w[names == u].sum() for u in uniq]) / w.sum()
     steps_per_epoch = len(train_ds) // gbs
     total = steps_per_epoch * tcfg["epochs"]
     sampler = WeightedRandomSampler(torch.as_tensor(w, dtype=torch.double), num_samples=len(train_ds), replacement=True)
