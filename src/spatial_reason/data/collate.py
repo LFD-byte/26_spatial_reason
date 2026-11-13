@@ -85,17 +85,27 @@ class Stage0Dataset(Dataset):
         }
 
 
-def dataset_balanced_weights(dataset: Stage0Dataset, alpha: float) -> np.ndarray:
-    """按数据集做温度采样:数据集 d 的总概率 ∝ n_d^alpha,数据集内均匀。
+def sampling_weights(names: np.ndarray, alpha: float, boost: dict[str, float] | None = None) -> np.ndarray:
+    """按数据集做温度采样:数据集 d 的总概率 ∝ boost_d * n_d^alpha,数据集内均匀。
 
     alpha=1 等于按样本数比例(不平衡);alpha=0 每个数据集等概率;0.5 是常用折中。
+    boost:个别数据集的额外倍数(配置里 data.datasets.{d}.sampling_weight,默认 1)。
     """
-    names = np.array([dataset.slices[si].dataset for si, _ in dataset.centers])
     uniq, counts = np.unique(names, return_counts=True)
-    share = counts.astype(float) ** alpha
+    share = counts.astype(float) ** alpha * np.array([(boost or {}).get(u, 1.0) for u in uniq])
     share /= share.sum()
     per = {u: sh / c for u, sh, c in zip(uniq, share, counts)}
     return np.array([per[n] for n in names])
+
+
+def dataset_boost(data_cfg: dict) -> dict[str, float]:
+    return {d: float(o.get("sampling_weight", 1.0)) for d, o in data_cfg["datasets"].items()}
+
+
+def dataset_balanced_weights(dataset: Stage0Dataset, alpha: float, boost: dict[str, float] | None = None
+                             ) -> np.ndarray:
+    names = np.array([dataset.slices[si].dataset for si, _ in dataset.centers])
+    return sampling_weights(names, alpha, boost)
 
 
 def sample_centers(slices: list[SliceData], max_per_slice: int | None, seed: int) -> list[tuple[int, int]]:
