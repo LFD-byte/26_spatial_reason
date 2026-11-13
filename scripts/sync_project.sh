@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # 把实验数据和结果同步到另一台服务器(代码走 git,不在这里同步)。
 #
-#   bash scripts/sync_project.sh user@host:/path/to/26_spatial_reason            # 默认:约 1 GB
-#   bash scripts/sync_project.sh user@host:/path/... --with-models               # 再加模型权重 70 GB
-#   bash scripts/sync_project.sh user@host:/path/... --with-raw                  # 再加原始数据 18 GB
+#   bash scripts/sync_project.sh user@host:/path/to/26_spatial_reason            # 默认:约 10 GB(outputs 占 5.5 GB)
+#   bash scripts/sync_project.sh user@host:/path/... --with-models               # 再加下载来的模型权重 70 GB
+#   bash scripts/sync_project.sh user@host:/path/... --with-raw                  # 再加原始数据 26 GB
 #   bash scripts/sync_project.sh user@host:/path/... --dry-run                   # 只列出要传的文件
 #   bash scripts/sync_project.sh myremote:bucket/26_spatial_reason --rclone      # 经云存储中转(两台机器不能直连时)
 #
 # 默认同步的是重新生成代价高或决定实验结果的部分:
 #   data/processed  data/embeddings  data/traces  data/raw/gene_maps  outputs  third_party
+#   以及本项目自己训练 / 拟合的模型 data/models/{pca,expr,novae_ft,novae_scratch}(约 630 MB):
+#   它们不在 HuggingFace 上,download_models.sh 下载不到,而已提取的嵌入依赖它们
 # 模型可在新服务器上用 scripts/download_models.sh 从 HuggingFace 重新下载,通常比服务器间互传快;
 # 原始数据只在需要重新预处理时才用得到(scripts/01_prepare_data.py 可重新下载)。
 #
@@ -30,6 +32,7 @@ for a in "$@"; do
 done
 
 PATHS=(data/processed data/embeddings data/traces data/raw/gene_maps outputs third_party
+       data/models/pca data/models/expr data/models/novae_ft data/models/novae_scratch
        data/README.md outputs/README.md)
 [ "$WITH_MODELS" = 1 ] && PATHS+=(data/models)
 [ "$WITH_RAW" = 1 ] && PATHS+=(data/raw)
