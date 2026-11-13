@@ -1,6 +1,6 @@
 # project_spatial_reason
 
-空间嵌入 + LLM 推理(目标:ACL 2027)。方案见 [docs/方案定位与实验路线.md](docs/方案定位与实验路线.md)。
+空间嵌入 + LLM 推理(目标:ACL 2027)。方案见 [docs/方案定位与实验路线.md](docs/方案定位与实验路线.md)。实验结果见 [docs/实验报告.md](docs/实验报告.md)。
 
 ## 目录
 
